@@ -1,0 +1,258 @@
+#! /usr/bin/env python
+import fileinput, glob, tempfile
+from Bio import SeqIO
+import argparse
+import subprocess
+import os, shutil, shlex, random
+import time
+import pandas as pd
+
+fna_list = ['/home/naclist/PlasmidEngineerDB/C1/C1.list',
+            '/home/naclist/PlasmidEngineerDB/C2/C2.list',
+            '/home/naclist/PlasmidEngineerDB/C3/C3.list',
+            '/home/naclist/PlasmidEngineerDB/C4/C4.list',
+            '/home/naclist/PlasmidEngineerDB/C5/C5.list',
+            '/home/naclist/PlasmidEngineerDB/C6/C6.list',
+            '/home/naclist/PlasmidEngineerDB/C7/C7.list',
+            '/home/naclist/PlasmidEngineerDB/C8/C8.list',
+            '/home/naclist/PlasmidEngineerDB/C9/C9.list',
+            '/home/naclist/PlasmidEngineerDB/C10/C10.list',
+            '/home/naclist/PlasmidEngineerDB/C11/C11.list',
+            '/home/naclist/PlasmidEngineerDB/TheOthers/TheOthers.list']
+
+allele_list = ['/home/naclist/PlasmidEngineerDB/C1/C1.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C2/C2.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C3/C3.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C4/C4.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C5/C5.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C6/C6.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C7/C7.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C8/C8.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C9/C9.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C10/C10.pan.allele',
+               '/home/naclist/PlasmidEngineerDB/C11/C11.pan.allele']
+
+ani_dic = {'C1': ['C1.out', 'C1.out.visual', '/home/naclist/PlasmidEngineerDB/C1/C1.pan.allele'],
+           'C2': ['C2.out', 'C2.out.visual', '/home/naclist/PlasmidEngineerDB/C2/C2.pan.allele'],
+           'C3': ['C3.out', 'C3.out.visual', '/home/naclist/PlasmidEngineerDB/C3/C3.pan.allele'],
+           'C4': ['C4.out', 'C4.out.visual', '/home/naclist/PlasmidEngineerDB/C4/C4.pan.allele'],
+           'C5': ['C5.out', 'C5.out.visual', '/home/naclist/PlasmidEngineerDB/C5/C5.pan.allele'],
+           'C6': ['C6.out', 'C6.out.visual', '/home/naclist/PlasmidEngineerDB/C6/C6.pan.allele'],
+           'C7': ['C7.out', 'C7.out.visual', '/home/naclist/PlasmidEngineerDB/C7/C7.pan.allele'],
+           'C8': ['C8.out', 'C8.out.visual', '/home/naclist/PlasmidEngineerDB/C8/C8.pan.allele'],
+           'C9': ['C9.out', 'C9.out.visual', '/home/naclist/PlasmidEngineerDB/C9/C9.pan.allele'],
+           'C10': ['C10.out', 'C10.out.visual', '/home/naclist/PlasmidEngineerDB/C10/C10.pan.allele'],
+           'C11': ['C11.out', 'C11.out.visual', '/home/naclist/PlasmidEngineerDB/C11/C11.pan.allele']}
+
+
+
+def ANI_cluster(plasmid_list, anifolder):
+    prefix = os.path.basename(plasmid_list).split('.')[0]
+    with open(os.path.join(anifolder, 'out_{0}.log'.format(prefix)), 'wt') as fout :
+        subprocess.Popen('fastANI --rl {0} -q {1} -t 20 -o {2} --fragLen 1000 --visualize'.format(
+            plasmid_list, args.fna, os.path.join(anifolder, prefix+'.out')
+        ).split(), stdout=fout, stderr=subprocess.PIPE).communicate()
+
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + '\t--Clustering with group ' +
+          prefix + '--')
+    return
+
+
+def ANI_parse(ani_file, ani_threshold):
+    accu_ani, num_ani, accu_length = 0, 0, 0
+    with open(ani_file) as ani_property :
+        for i in ani_property:
+            each_ani, each_map_length = float(i.split('\t')[2]), int(i.split('\t')[3])
+            accu_ani += each_ani
+            accu_length += each_map_length
+            num_ani += 1
+
+    if accu_ani <= ani_threshold * num_ani :
+        return False
+    else:
+        mean_map_length = int((accu_length / num_ani) * 1000)
+        return mean_map_length
+
+
+def reformat_fasta(dirname, input_fna):
+    fasta_reformat = os.path.join(dirname, 'reform_' + os.path.basename(input_fna))
+    with open(args.fna) as fasta, open(fasta_reformat, 'wt') as output_fasta :
+        for line_id, line in enumerate(fasta):
+            if line.startswith('>'):
+                if line_id > 0 :
+                    output_fasta.write('\n')
+                output_fasta.write(line)
+            else:
+                output_fasta.write(line.strip())
+    return fasta_reformat
+
+
+def contig_info(reform_fna, ANI_visual, ANI_file, ANI_threshold):
+    ANI_parse_value = ANI_parse(ANI_file, ANI_threshold)
+    if not ANI_parse_value:
+        return False
+
+    with open(reform_fna) as fas_file :
+        fas = fas_file.readlines()
+        contiginfo = {}
+        seqs = 0
+        for line, seqs_1 in zip(fas[::2], fas[1::2]) :
+            seq_size = len(seqs_1)
+            seqs += seq_size
+            contiginfo[line.strip()[1:].split()[0]] = [seqs - seq_size + 1, seqs]
+
+    with open(ANI_visual) as frag_info :
+        frag_list = []
+        for i in frag_info:
+            p = i.split('\t')
+            if len(p) == 12 and float(p[2]) >= ANI_threshold:
+                frag_list.append(
+                    contig_judge(contiginfo, int(i.split('\t')[6]), ANI_parse_value))
+
+    uniq_contig_frag_list = [ n for n in (set(frag_list)) if n ]
+    # print(uniq_contig_frag_list)
+    os.remove(reform_fna)
+    return uniq_contig_frag_list
+
+
+def contig_judge(contiginfo, site, mean_map_length): ## check
+    for keys, values in contiginfo.items():
+        if values[0] <= site <= values[1]:
+            if values[1] - values[0] <= mean_map_length:
+                return keys
+    return
+
+
+def plasmid_candidate_seq(contigID, fasta_reformat):
+    for contig in SeqIO.parse(fasta_reformat, 'fasta'):
+        if contig.id == contigID:
+            return '>' + contigID + ' candidate plasmid sequence' + '\n' + str(contig.seq)
+
+
+def plasmid_candidate_construct(plasmid_seq, fasta_reformat, plasmid_group):
+    if not plasmid_seq:
+        return False
+
+    outfile = plasmid_group + '_in_' + os.path.basename(args.fna)
+    with open(outfile, 'w') as plasmid :
+        for contig in plasmid_seq:
+            plasmid.write(plasmid_candidate_seq(contig, fasta_reformat)+'\n')
+    return outfile
+
+
+def allele_filter(candidate_plasmid, allele_fna, group, len_threshold):
+    if not candidate_plasmid:
+        print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) +
+              '\t' + group + ':\t' +
+              'was not able to reconstructed.')
+        return
+
+    subprocess.Popen(
+        '/home/zhemin/bin/FastSeek --ref ' + allele_fna + ' --fna ' + candidate_plasmid + ' --silent --ID ' +
+        candidate_plasmid.split('.')[0], shell=True).communicate()
+    FastSeek_pivot = pd.pivot_table(pd.read_csv(candidate_plasmid.split('.')[0] + 'Result/summary.txt', sep='\t'),
+                                    index=[u'Contig'], values=[u'Length'],
+                                    aggfunc='sum')
+    FastSeek_measure = {}
+    Plasmid_contig_len = {}
+    candidate_plasmid = SeqIO.parse(candidate_plasmid, 'fasta')
+    for index, row in FastSeek_pivot.iterrows():
+        FastSeek_measure[index] = row['Length']
+    for contig in candidate_plasmid:
+        Plasmid_contig_len[contig.id] = [len(str(contig.seq)), contig.seq]
+    Comparison = {}
+    for Compare_contigs in list(FastSeek_measure.keys()):
+        Comparison[Compare_contigs] = [
+            FastSeek_measure.get(Compare_contigs) / Plasmid_contig_len.get(Compare_contigs)[0],
+            Plasmid_contig_len.get(Compare_contigs)[1]]
+    with open(args.fna.split('.')[0] + '_' + group + '.plasmid', 'w') as filtered_plasmid :
+        accu_pass_proportion = 0
+        min_pass_proportion = 1
+        max_pass_proportion = 0
+        num_pass_contigs = 0
+        for keys, values in Comparison.items():
+            if values[0] >= len_threshold / 100.:
+                filtered_plasmid.write('>' + str(keys) + '\n' + values[1] +'\n')
+                num_pass_contigs += 1
+                accu_pass_proportion += values[0]
+        if num_pass_contigs == 0:
+            print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) +
+                  '\t' + group + ':\t' +
+                  'was not able to reconstructed.')
+        else:
+            print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) +
+                  '\t' +
+                  group + ':\t' +
+                  str(round(accu_pass_proportion / num_pass_contigs, 3) * 100) +
+                  '% of presumed plasmid reconstructed.')
+
+    if os.path.getsize(args.fna.split('.')[0] + '_' + group + '.plasmid') == 0:
+        os.remove(args.fna.split('.')[0] + '_' + group + '.plasmid')
+
+
+
+args = None
+
+def main() :
+    parser = argparse.ArgumentParser(
+        description='Plasmid reduction from short read files using reference sequences generated by plasmidPEPPAN',
+        add_help=False,
+        usage='\nPlasmidEngineer.py --fna [Input draft sequence] --ani [Integer. Specify the value of ANI when the sequence is matched. Default: 95] --threshold [Contigs with (Mapped Genes Length/Contig Length) less than threshold will be discarded. Default: 50]\nOnly avaliable for Acinetobacter baumannii currently.')
+
+    parser.add_argument(
+        '--fna',
+        metavar='[input.fna]',
+        required=True,
+        type=str)
+    parser.add_argument(
+        '--ani',
+        metavar='[threshold of ani]',
+        required=False,
+        default=95,
+        type=int)
+    parser.add_argument(
+        '--threshold',
+        metavar='[threshold of identifying the plasmid.]',
+        required=False,
+        default=50,
+        type=int)
+
+    global args
+    args = parser.parse_args()
+
+    # ANI_threshold = args.ani if args.ani else 95
+
+
+    print(">>>>>>>>>>>>>>>>>>>>>>>>>")
+    with tempfile.TemporaryDirectory(dir='.', prefix='temp_ANI.') as anifolder :
+        print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + "\t--Calculating ANI value--")
+        print(">>>>>>>>>>>>>>>>>>>>>>>>>")
+        for i in fna_list:
+            ANI_cluster(i, anifolder)
+
+        for key, values in ani_dic.items():
+            allele_filter(
+                plasmid_candidate_construct(
+                    contig_info(reformat_fasta(anifolder, args.fna),
+                                os.path.join(anifolder, str(values[1])),
+                                os.path.join(anifolder, str(values[0])), args.ani),
+                    args.fna, key),
+                values[2], key, args.threshold)
+
+    for dirname in glob.glob('*_in_' + args.fna.split('.')[0] + 'Result') :
+        shutil.rmtree(dirname)
+
+    for fname in glob.glob('reform*.fna') :
+        os.unlink(fname)
+
+    for fname in glob.glob('*_in_' + args.fna.split('.')[0] + '.fna') :
+        os.unlink(fname)
+
+    print(">>>>>>>>>>>>>>>>>>>>>>>>>\nOpen access on github.com/Naclist, please star it if work.")
+
+if __name__ == '__main__' :
+    main()
+
+
+
+
